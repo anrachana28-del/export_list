@@ -6,7 +6,7 @@
 <title>Telegram Export Pro</title>
 <style>
 body{font-family:sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;padding:20px}
-.container{max-width:750px;width:100%;background:#1e293b;padding:25px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}
+.container{max-width:800px;width:100%;background:#1e293b;padding:25px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}
 h2{text-align:center;color:#38bdf8;margin-bottom:20px}
 h3{margin:15px 0 5px;color:#a5b4fc}
 input,select{width:100%;padding:10px;margin-top:8px;border-radius:10px;border:none;background:#0f172a;color:#fff}
@@ -26,7 +26,6 @@ button:hover{opacity:0.9}
 </style>
 </head>
 <body>
-
 <div class="container">
 <h2>Telegram Export Pro</h2>
 
@@ -35,31 +34,21 @@ button:hover{opacity:0.9}
 
 <h3>Or Select My Group</h3>
 <input id="searchGroup" placeholder="Search group...">
-
-<h3>Filter by Type / Role</h3>
-<select id="typeRoleFilter">
-  <option value="all">All</option>
-  <option value="group-admin">Group - Admin</option>
-  <option value="group-member">Group - Member</option>
-  <option value="channel-admin">Channel - Admin</option>
-  <option value="channel-member">Channel - Member</option>
-</select>
-
 <select id="myGroups"></select>
 <button onclick="loadGroups()">🔄 Refresh Groups</button>
 
 <h3>Profile Photo Filter</h3>
 <select id="profileFilter">
-<option value="all">All</option>
-<option value="with">With Photo</option>
-<option value="without">Without Photo</option>
+  <option value="all">All</option>
+  <option value="with">With Photo</option>
+  <option value="without">Without Photo</option>
 </select>
 
 <h3>Last Online Filter</h3>
 <select id="onlineFilter">
-<option value="all">All</option>
-<option value="week">Online This Week</option>
-<option value="month">Online This Month</option>
+  <option value="all">All</option>
+  <option value="week">Online This Week</option>
+  <option value="month">Online This Month</option>
 </select>
 
 <h3>Limit Count</h3>
@@ -73,42 +62,40 @@ button:hover{opacity:0.9}
 
 <h3>Progress</h3>
 <div class="progressBar">
-<div class="progressFill" id="progressFill">0%</div>
+  <div class="progressFill" id="progressFill">0%</div>
 </div>
 <div id="eta">ETA: 0s</div>
-
-<h3>Group Members:</h3>
 <p>Total in Group: <span id="totalGroup">0</span> | Exported: <span id="totalExported">0</span></p>
 
-<div id="members"></div>
+<h3>Search / Copy / Sort Members</h3>
+<input id="searchMember" placeholder="Search username...">
+<button onclick="sortMembersAZ()">Sort A-Z</button>
+<button onclick="copyAllMembers()">📋 Copy All</button>
 
+<div id="members"></div>
 </div>
 
 <script>
 let exportInterval = null;
 let startTime = null;
+let allMembers = [];
 
+// Load My Groups
 async function loadGroups(){
   const res = await fetch("/mygroups");
   const data = await res.json();
   if(!data.success) return;
-
   const select = document.getElementById("myGroups");
   select.innerHTML = "";
-  const filter = document.getElementById("typeRoleFilter").value;
-
   data.groups.forEach(g => {
-    const key = `${g.type}-${g.role}`;
-    if(filter === "all" || filter === key){
       const option = document.createElement("option");
       option.value = g.username;
-      option.textContent = `${g.title} (@${g.username}) [${g.type}-${g.role}]`;
+      option.textContent = `${g.title} (@${g.username})`;
       select.appendChild(option);
-    }
   });
 }
 
-document.getElementById("typeRoleFilter").addEventListener("change", loadGroups);
+// Handle selection
 document.getElementById("myGroups").addEventListener("change", function(){
   document.getElementById("linkInput").value = "";
 });
@@ -116,11 +103,11 @@ document.getElementById("searchGroup").addEventListener("input", function(){
   const filter = this.value.toLowerCase();
   const options = document.getElementById("myGroups").options;
   for (let i=0;i<options.length;i++){
-    options[i].style.display =
-      options[i].text.toLowerCase().includes(filter) ? "" : "none";
+    options[i].style.display = options[i].text.toLowerCase().includes(filter) ? "" : "none";
   }
 });
 
+// Start Export
 async function startExport(){
   const link = document.getElementById("linkInput").value;
   const selectGroup = document.getElementById("myGroups").value;
@@ -129,11 +116,7 @@ async function startExport(){
   const onlineFilter = document.getElementById("onlineFilter").value;
   const limitCount = document.getElementById("limitCount").value;
 
-  if(!target){
-    alert("Please enter a link or select a group.");
-    return;
-  }
-
+  if(!target){ alert("Please enter a link or select a group."); return; }
   startTime = Date.now();
 
   await fetch("/export",{
@@ -141,18 +124,17 @@ async function startExport(){
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({ target, profileFilter, onlineFilter, limitCount })
   });
-
   monitorProgress();
 }
 
+// Monitor progress
 function monitorProgress(){
   if(exportInterval) clearInterval(exportInterval);
-
   exportInterval = setInterval(async()=>{
     const res = await fetch("/progress");
     const data = await res.json();
 
-    const percent = data.total>0 ? Math.min(100,Math.floor((data.current/data.total)*100)) : 0;
+    const percent = data.total>0 ? Math.floor((data.current/data.total)*100) : 0;
     document.getElementById("progressFill").style.width = percent+"%";
     document.getElementById("progressFill").innerText = percent+"%";
 
@@ -165,28 +147,45 @@ function monitorProgress(){
       document.getElementById("eta").innerText = "ETA: "+formatTime(eta);
     }
 
-    const box = document.getElementById("members");
-    box.innerHTML = "";
-    data.members.forEach(m=>{
-      const div=document.createElement("div");
-      div.textContent=m;
-      box.appendChild(div);
-    });
+    allMembers = [...data.members];
+    renderMembers(allMembers);
 
-    if(!data.running){
-      clearInterval(exportInterval);
-      document.getElementById("eta").innerText = "ETA: 0s";
-      downloadExcel();
-    }
+    if(!data.running) clearInterval(exportInterval);
   },1000);
 }
 
+// Render members with filter
+function renderMembers(list){
+  const filter = document.getElementById("searchMember").value.toLowerCase();
+  const box = document.getElementById("members");
+  box.innerHTML = "";
+  list.filter(m=>m.toLowerCase().includes(filter)).forEach(m=>{
+    const div=document.createElement("div");
+    div.textContent = m;
+    box.appendChild(div);
+  });
+}
+
+// Search live
+document.getElementById("searchMember").addEventListener("input",()=>{ renderMembers(allMembers); });
+
+// Sort A-Z
+function sortMembersAZ(){ allMembers.sort((a,b)=>a.toLowerCase().localeCompare(b.toLowerCase())); renderMembers(allMembers); }
+
+// Copy all
+function copyAllMembers(){
+  const text = allMembers.join("\n");
+  navigator.clipboard.writeText(text).then(()=>alert("All members copied!")).catch(err=>alert("Copy failed: "+err));
+}
+
+// Stop export
 async function stopExport(){
   await fetch("/stop",{method:"POST"});
   if(exportInterval) clearInterval(exportInterval);
   alert("Export stopped!");
 }
 
+// Download Excel
 function downloadExcel(){ window.location="/download/excel"; }
 function formatTime(seconds){
   const h=Math.floor(seconds/3600);
@@ -197,6 +196,5 @@ function formatTime(seconds){
 
 loadGroups();
 </script>
-
 </body>
 </html>
