@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram Export Pro</title>
+<style>
+body{font-family:sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;padding:20px}
+.container{max-width:750px;width:100%;background:#1e293b;padding:25px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,0.5)}
+h2{text-align:center;color:#38bdf8;margin-bottom:20px}
+h3{margin:15px 0 5px;color:#a5b4fc}
+input,select{width:100%;padding:10px;margin-top:8px;border-radius:10px;border:none;background:#0f172a;color:#fff}
+button{padding:10px;border:none;border-radius:10px;font-weight:bold;cursor:pointer;transition:0.3s}
+button:hover{opacity:0.9}
+.btnRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.btn-start{background:#3ca507;color:#fff}
+.btn-stop{background:#c90a0a;color:#fff}
+#members{margin-top:15px;max-height:250px;overflow:auto;background:#0f172a;padding:10px;border-radius:10px}
+.progressBar{height:25px;background:#334155;border-radius:12px;margin-top:10px;overflow:hidden}
+.progressFill{height:100%;background:#38bdf8;width:0%;text-align:center;line-height:25px;font-size:13px}
+#eta{margin-top:5px;font-size:14px;color:#a5b4fc}
+@media(max-width:600px){
+  .btnRow{flex-direction:column}
+  input, select, button{font-size:14px}
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+<h2>Telegram Export Pro</h2>
+
+<h3>Enter Link (User / Group) - optional</h3>
+<input id="linkInput" placeholder="https://t.me/username_or_group">
+
+<h3>Or Select My Group</h3>
+<input id="searchGroup" placeholder="Search group...">
+
+<h3>Filter by Type / Role</h3>
+<select id="typeRoleFilter">
+  <option value="all">All</option>
+  <option value="group-admin">Group - Admin</option>
+  <option value="group-member">Group - Member</option>
+  <option value="channel-admin">Channel - Admin</option>
+  <option value="channel-member">Channel - Member</option>
+</select>
+
+<select id="myGroups"></select>
+<button onclick="loadGroups()">🔄 Refresh Groups</button>
+
+<h3>Profile Photo Filter</h3>
+<select id="profileFilter">
+<option value="all">All</option>
+<option value="with">With Photo</option>
+<option value="without">Without Photo</option>
+</select>
+
+<h3>Last Online Filter</h3>
+<select id="onlineFilter">
+<option value="all">All</option>
+<option value="week">Online This Week</option>
+<option value="month">Online This Month</option>
+</select>
+
+<h3>Limit Count</h3>
+<input type="number" id="limitCount" placeholder="Leave empty = unlimited">
+
+<div class="btnRow">
+<button class="btn-start" onclick="startExport()">Start Export</button>
+<button class="btn-stop" onclick="stopExport()">⏹ Stop Export</button>
+<button onclick="downloadExcel()">⬇ Excel</button>
+</div>
+
+<h3>Progress</h3>
+<div class="progressBar">
+<div class="progressFill" id="progressFill">0%</div>
+</div>
+<div id="eta">ETA: 0s</div>
+
+<h3>Group Members:</h3>
+<p>Total in Group: <span id="totalGroup">0</span> | Exported: <span id="totalExported">0</span></p>
+
+<div id="members"></div>
+
+</div>
+
+<script>
+let exportInterval = null;
+let startTime = null;
+
+async function loadGroups(){
+  const res = await fetch("/mygroups");
+  const data = await res.json();
+  if(!data.success) return;
+
+  const select = document.getElementById("myGroups");
+  select.innerHTML = "";
+  const filter = document.getElementById("typeRoleFilter").value;
+
+  data.groups.forEach(g => {
+    const key = `${g.type}-${g.role}`;
+    if(filter === "all" || filter === key){
+      const option = document.createElement("option");
+      option.value = g.username;
+      option.textContent = `${g.title} (@${g.username}) [${g.type}-${g.role}]`;
+      select.appendChild(option);
+    }
+  });
+}
+
+document.getElementById("typeRoleFilter").addEventListener("change", loadGroups);
+document.getElementById("myGroups").addEventListener("change", function(){
+  document.getElementById("linkInput").value = "";
+});
+document.getElementById("searchGroup").addEventListener("input", function(){
+  const filter = this.value.toLowerCase();
+  const options = document.getElementById("myGroups").options;
+  for (let i=0;i<options.length;i++){
+    options[i].style.display =
+      options[i].text.toLowerCase().includes(filter) ? "" : "none";
+  }
+});
+
+async function startExport(){
+  const link = document.getElementById("linkInput").value;
+  const selectGroup = document.getElementById("myGroups").value;
+  const target = link || selectGroup;
+  const profileFilter = document.getElementById("profileFilter").value;
+  const onlineFilter = document.getElementById("onlineFilter").value;
+  const limitCount = document.getElementById("limitCount").value;
+
+  if(!target){
+    alert("Please enter a link or select a group.");
+    return;
+  }
+
+  startTime = Date.now();
+
+  await fetch("/export",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ target, profileFilter, onlineFilter, limitCount })
+  });
+
+  monitorProgress();
+}
+
+function monitorProgress(){
+  if(exportInterval) clearInterval(exportInterval);
+
+  exportInterval = setInterval(async()=>{
+    const res = await fetch("/progress");
+    const data = await res.json();
+
+    const percent = data.total>0 ? Math.min(100,Math.floor((data.current/data.total)*100)) : 0;
+    document.getElementById("progressFill").style.width = percent+"%";
+    document.getElementById("progressFill").innerText = percent+"%";
+
+    document.getElementById("totalGroup").innerText = data.total;
+    document.getElementById("totalExported").innerText = data.current;
+
+    if(data.current>0 && data.total>0){
+      const elapsed = (Date.now()-startTime)/1000;
+      const eta = Math.round((elapsed/data.current)*(data.total - data.current));
+      document.getElementById("eta").innerText = "ETA: "+formatTime(eta);
+    }
+
+    const box = document.getElementById("members");
+    box.innerHTML = "";
+    data.members.forEach(m=>{
+      const div=document.createElement("div");
+      div.textContent=m;
+      box.appendChild(div);
+    });
+
+    if(!data.running){
+      clearInterval(exportInterval);
+      document.getElementById("eta").innerText = "ETA: 0s";
+      downloadExcel();
+    }
+  },1000);
+}
+
+async function stopExport(){
+  await fetch("/stop",{method:"POST"});
+  if(exportInterval) clearInterval(exportInterval);
+  alert("Export stopped!");
+}
+
+function downloadExcel(){ window.location="/download/excel"; }
+function formatTime(seconds){
+  const h=Math.floor(seconds/3600);
+  const m=Math.floor((seconds%3600)/60);
+  const s=Math.floor(seconds%60);
+  return (h>0?h+"h ":"")+(m>0?m+"m ":"")+s+"s";
+}
+
+loadGroups();
+</script>
+
+</body>
+</html>
