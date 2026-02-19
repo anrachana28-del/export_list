@@ -1,104 +1,83 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
-const { TelegramClient } = require('telegram');
-const { StringSession } = require('telegram/sessions');
+const express = require("express");
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions");
+const fs = require("fs");
+require("dotenv").config();
 
 const app = express();
 app.use(express.json());
-app.use(cors());
-
-const PORT = process.env.PORT || 3000;
+app.use(express.static("."));
 
 const apiId = parseInt(process.env.API_ID_1);
 const apiHash = process.env.API_HASH_1;
 const stringSession = new StringSession(process.env.SESSION_1);
 
-let client;
-(async () => {
-  client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
-  await client.start({ phoneNumber: async () => { throw new Error('Already logged in') } });
-  console.log('Telegram client connected');
-})();
+const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
+let exportData = { running:false, current:0, total:0, members:[], interval:null };
 
-/* ================= EXPORT STATE ================= */
-let exportData = {
-  running: false,
-  total: 0,
-  current: 0,
-  members: [],
-  interval: null
-};
+(async () => { await client.start({ phoneNumber: async () => prompt("Number?"), password: async () => prompt("Password?") }); console.log("Telegram Client ready"); })();
 
-/* ================= ROUTES ================= */
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-
-app.get('/mygroups', async (req, res) => {
-  try {
-    const dialogs = await client.getDialogs();
-    const groups = dialogs
-      .filter(d => d.isGroup || d.isChannel)
-      .map(d => ({
-        username: d.username || d.id.toString(),
-        title: d.title,
-        type: d.isChannel ? 'channel' : 'group',
-        role: d.adminRights ? 'admin' : 'member'
-      }));
-    res.json({ success: true, groups });
-  } catch (err) {
-    console.log(err);
-    res.json({ success: false, groups: [] });
-  }
+// Dummy mygroups endpoint
+app.get("/mygroups", async(req,res)=>{
+  // Return some groups example
+  res.json({ success:true, groups:[ {username:"mygroup1",title:"My Group 1"}, {username:"mygroup2",title:"My Group 2"} ] });
 });
 
-app.post('/export', async (req, res) => {
-  if(exportData.running) return res.json({ success: false, message: "Export running" });
+// Start export
+app.post("/export", async(req,res)=>{
+  if(exportData.running) return res.json({ success:false,message:"Export already running" });
 
-  const { target, limitCount } = req.body;
-  exportData.running = true;
-  exportData.current = 0;
-  exportData.members = [];
+  const { target, profileFilter, onlineFilter, limitCount } = req.body;
+  exportData = { running:true, current:0, total:0, members:[], interval:null };
 
-  const entity = await client.getEntity(target);
-  let participants = await client.getParticipants(entity, { limit: limitCount || 0 });
+  try{
+    const entity = await client.getEntity(target);
+    let participants = await client.getParticipants(entity,{limit:limitCount || 0});
 
-  exportData.total = participants.length;
+    participants = participants.filter(m=>{
+      if(m.bot) return false;
+      if(!m.username && !m.firstName) return false; // private/deleted
+      if(profileFilter==='with' && !m.photo) return false;
+      if(profileFilter==='without' && m.photo) return false;
+      // last online filter can be added here
+      return true;
+    });
 
-  exportData.interval = setInterval(() => {
-    if(exportData.current >= exportData.total){
-      clearInterval(exportData.interval);
-      exportData.running = false;
-      return;
-    }
-    const member = participants[exportData.current];
-    exportData.members.push(member.username || member.id.toString());
-    exportData.current++;
-  }, 50);
+    exportData.total = participants.length;
 
-  res.json({ success: true });
+    exportData.interval = setInterval(()=>{
+      if(exportData.current>=exportData.total){
+        clearInterval(exportData.interval);
+        exportData.running=false;
+        return;
+      }
+      const member = participants[exportData.current];
+      exportData.members.push(member.username || member.id.toString());
+      exportData.current++;
+    },50);
+
+    res.json({ success:true });
+  }catch(err){ console.log(err); exportData.running=false; res.json({ success:false,message:err.message }); }
 });
 
-app.get('/progress', (req, res) => {
-  res.json({
-    running: exportData.running,
-    total: exportData.total,
-    current: exportData.current,
-    members: exportData.members
-  });
-});
-
-app.post('/stop', (req, res) => {
+// Stop export
+app.post("/stop",(req,res)=>{
   if(exportData.interval) clearInterval(exportData.interval);
-  exportData.running = false;
-  res.json({ success: true });
+  exportData.running=false;
+  res.json({ success:true });
 });
 
-app.get('/download/excel', (req, res) => {
-  const filePath = path.join(__dirname, 'export.xlsx');
-  fs.writeFileSync(filePath, exportData.members.join('\n'));
-  res.download(filePath, 'export.xlsx');
+// Progress
+app.get("/progress",(req,res)=>{
+  res.json(exportData);
 });
 
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+// Download Excel
+app.get("/download/excel",(req,res)=>{
+  const header="Username/ID\n";
+  const data = exportData.members.join("\n");
+  fs.writeFileSync("export.xlsx",header+data);
+  res.download("export.xlsx");
+});
+
+app.listen(process.env.PORT||3000,()=>console.log("Server running..."));
